@@ -51,22 +51,31 @@ def ceil_div(a: int, b: int) -> int:
     return (a + b - 1) // b
 
 
-def try_get_device_name(vllm_base: Path, utils_file: str) -> str:
+def try_get_device_name(vllm_base: Path, utils_file: str, device_override: str = None) -> str:
+    """
+    Attempts to get the device name. If an override is provided, it formats it 
+    to match vLLM's pattern (replacing spaces with underscores).
+    """
+    if device_override:
+        return device_override.replace(" ", "_")
+
     utils_path = next(vllm_base.rglob(utils_file), None)
     if not utils_path:
-        return "AMD_Radeon_Graphics"
+        print("Warning: Could not dynamically detect device. Defaulting to 'Unknown_Device'.")
+        return "Unknown_Device"
 
     try:
         spec = importlib.util.spec_from_file_location("v_utils", utils_path)
         if spec is None or spec.loader is None:
-            return "AMD_Radeon_Graphics"
+            return "Unknown_Device"
 
         mod = importlib.util.module_from_spec(spec)
         sys.modules["v_utils"] = mod
         spec.loader.exec_module(mod)
         return mod.current_platform.get_device_name().replace(" ", "_")
     except Exception:
-        return "AMD_Radeon_Graphics"
+        print("Warning: Dynamic device detection failed. Defaulting to 'Unknown_Device'.")
+        return "Unknown_Device"
 
 
 def get_dtype_paths(vllm_base: Path, utils_file: str, bench_script_name: str) -> tuple[Path, Path]:
@@ -105,12 +114,6 @@ def make_filename(N: int, K: int, device_name: str, block_n: int, block_k: int, 
 
 
 def extract_qwen35_runtime_text_shapes(root_config: dict) -> list[tuple[str, int, int, str]]:
-    """
-    Returns runtime-oriented GEMM shapes for Qwen3.5 text path.
-
-    Output:
-        (shard_type, N, K, label)
-    """
     text_cfg = normalize_text_config(root_config)
 
     hidden_size = text_cfg.get("hidden_size")
@@ -147,10 +150,6 @@ def apply_tp_sharding(
     raw_shapes: list[tuple[str, int, int, str]],
     tp: int,
 ) -> list[tuple[int, int, str]]:
-    """
-    column-parallel: shard N
-    row-parallel: shard K
-    """
     result = []
 
     for shard_type, N, K, label in raw_shapes:
