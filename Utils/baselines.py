@@ -13,7 +13,7 @@ def get_default_baseline_path() -> Path:
         
     return Path(base) / "MagicKernelConfigs" / "Baselines"
 
-def get_baseline_file_path(baseline_path_arg: str, gpu_name: str, gfx_version: str, backend: str) -> Path:
+def get_baseline_file_path(baseline_path_arg: str, gpu_name: str, gfx_version: str, backend: str, dtype_family: str, dtype_subtype: str) -> Path:
     if baseline_path_arg:
         base = Path(baseline_path_arg)
     else:
@@ -25,7 +25,7 @@ def get_baseline_file_path(baseline_path_arg: str, gpu_name: str, gfx_version: s
     if gfx_version:
         path = path / gfx_version
         
-    path = path / backend / "baseline.json"
+    path = path / backend / dtype_family / dtype_subtype / "baseline.json"
     return path
 
 class BaselineCache:
@@ -42,21 +42,54 @@ class BaselineCache:
                 print(f"Warning: Failed to load baseline cache at {self.path}: {e}")
                 
         return {
-            "version": 1,
+            "candidate_builder_version": 1,
+            "kernel_harness_version": 1,
+            "schema_version": 1,
             "gpu": None,
             "gfx": None,
             "backend": None,
+            "dtype_family": None,
+            "dtype_subtype": None,
             "block_n": None,
             "block_k": None,
             "shapes": {}  # Maps "N_K_is_moe" to {"completed": 0, "total": 0, "results": {}}
         }
         
-    def init_metadata(self, gpu: str, gfx: str, backend: str, block_n: int, block_k: int):
+    def init_metadata(self, gpu: str, gfx: str, backend: str, dtype_family: str, dtype_subtype: str, block_n: int, block_k: int):
         self.data["gpu"] = gpu
         self.data["gfx"] = gfx
         self.data["backend"] = backend
+        self.data["dtype_family"] = dtype_family
+        self.data["dtype_subtype"] = dtype_subtype
         self.data["block_n"] = block_n
         self.data["block_k"] = block_k
+        self._save()
+        
+    def is_compatible(self, gpu: str, gfx: str, backend: str, dtype_family: str, dtype_subtype: str) -> bool:
+        if self.data["candidate_builder_version"] != 1: return False
+        if self.data["kernel_harness_version"] != 1: return False
+        if self.data["schema_version"] != 1: return False
+        if self.data.get("gpu") and self.data["gpu"] != gpu: return False
+        if self.data.get("gfx") and self.data["gfx"] != gfx: return False
+        if self.data.get("backend") and self.data["backend"] != backend: return False
+        if self.data.get("dtype_family") and self.data["dtype_family"] != dtype_family: return False
+        if self.data.get("dtype_subtype") and self.data["dtype_subtype"] != dtype_subtype: return False
+        return True
+        
+    def clear(self):
+        self.data = {
+            "candidate_builder_version": 1,
+            "kernel_harness_version": 1,
+            "schema_version": 1,
+            "gpu": None,
+            "gfx": None,
+            "backend": None,
+            "dtype_family": None,
+            "dtype_subtype": None,
+            "block_n": None,
+            "block_k": None,
+            "shapes": {}
+        }
         self._save()
         
     def get_shape_key(self, n: int, k: int, is_moe: bool) -> str:

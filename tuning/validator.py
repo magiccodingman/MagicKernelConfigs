@@ -5,7 +5,7 @@ import textwrap
 from pathlib import Path
 from typing import Dict, Any
 
-from tuning.kernel_harness import TRITON_HARNESS_CODE
+from tuning.kernel_harness import get_harness_code
 
 def validate_correctness(candidate: Dict[str, Any], n: int, k: int, m: int, dtype_family: str, is_moe: bool, backend: str) -> bool:
     """
@@ -13,20 +13,38 @@ def validate_correctness(candidate: Dict[str, Any], n: int, k: int, m: int, dtyp
     Ensures safe kernel execution without crashing, checks tolerance limits,
     and prevents PyTorch/Triton segfaults from taking down the tuner.
     """
-    harness_code = TRITON_HARNESS_CODE.format(backend=backend) + textwrap.dedent(f"""\
+    harness_code = get_harness_code(backend, dtype_family, is_moe) + textwrap.dedent(f"""\
         
         try:
             device = "cuda" if torch.cuda.is_available() else "cpu"
             
-            a = torch.randn(({m}, {k}), device=device, dtype=torch.float16)
-            b = torch.randn(({k}, {n}), device=device, dtype=torch.float16)
+            if "{dtype_family}" == "fp8":
+                a_16 = torch.randn(({m}, {k}), device=device, dtype=torch.float16)
+                b_16 = torch.randn(({k}, {n}), device=device, dtype=torch.float16)
+                a = a_16.to(torch.float8_e4m3fn)
+                b = b_16.to(torch.float8_e4m3fn)
+            elif "{dtype_family}" == "int8":
+                a_16 = torch.randint(-128, 127, ({m}, {k}), device=device, dtype=torch.int8).to(torch.float16)
+                b_16 = torch.randint(-128, 127, ({k}, {n}), device=device, dtype=torch.int8).to(torch.float16)
+                a = a_16.to(torch.int8)
+                b = b_16.to(torch.int8)
+            else:
+                a_16 = torch.randn(({m}, {k}), device=device, dtype=torch.float16)
+                b_16 = torch.randn(({k}, {n}), device=device, dtype=torch.float16)
+                a = a_16
+                b = b_16
             
             candidate_params = {candidate}
             
-            # Reference baseline
-            baseline_out = torch.matmul(a, b)
+            # Reference baseline via float16 exact computation
+            if "{dtype_family}" == "fp8":
+                baseline_out = torch.matmul(a.to(torch.float16), b.to(torch.float16))
+            elif "{dtype_family}" == "int8":
+                baseline_out = torch.matmul(a_16, b_16)
+            else:
+                baseline_out = torch.matmul(a_16, b_16)
             
-            # Real Triton/AITER invocation
+            # Real Native Subprocess Compilation
             kernel_out = run_backend_kernel(a, b, candidate_params, "{backend}")
             
             if torch.isnan(kernel_out).any() or torch.isinf(kernel_out).any():

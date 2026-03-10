@@ -100,14 +100,20 @@ def validate_backend(backend: str, is_amd: bool):
         print("Exiting cleanly.")
         sys.exit(0)
         
-    if backend == "aiter_triton" and not is_amd:
-        print(f"\n❌ Error: Backend '{backend}' is only supported on AMD hardware.")
-        sys.exit(1)
-        
+    if backend == "aiter_triton":
+        try:
+            import aiter
+            import aiter.ops.triton
+            print(f"[Backend Verified] AITER runtime (Triton fallback) loaded: {aiter.ops.triton.__file__}")
+        except Exception as e:
+            print(f"\\n❌ Error: AITER runtime (Triton fallback) failed to load. Reason: {e}")
+            print("The 'aiter_triton' backend requires the AITER package compiled with Triton fallback modules to be installed.")
+            sys.exit(1)
+            
     # Strict Backend Guarantee
-    print(f"\n=== Enforcing Strict Backend Runtime: {backend} ===")
+    print(f"\\n=== Enforcing Strict Backend Runtime: {backend} ===")
     
-    # 1. Triton must be loadable for either 'triton' or 'aiter_triton'
+    # 1. Triton must be loadable
     try:
         import triton
         assert hasattr(triton, "jit"), "Triton module missing 'jit' attribute"
@@ -116,13 +122,3 @@ def validate_backend(backend: str, is_amd: bool):
         print(f"\n❌ Error: Triton runtime failed to load. Reason: {e}")
         print("Tuning requires real Triton execution to prevent simulated fallback. Aborting.")
         sys.exit(1)
-        
-    # 2. AITER must be loadable if requested
-    if backend == "aiter_triton":
-        try:
-            import aiter
-            print(f"[Backend Verified] AITER runtime loaded: {aiter.__file__}")
-        except Exception as e:
-            print(f"\n❌ Error: AITER runtime failed to load. Reason: {e}")
-            print("Tuning requires real AITER execution when aiter_triton is specified. Aborting.")
-            sys.exit(1)

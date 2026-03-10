@@ -1,0 +1,44 @@
+{"ts": "2026-03-10T13:06:31.205305", "event": "candidate_start", "label": "baseline 1/3600", "filename": "N=1024,K=2816,device_name=AMD_Radeon_Graphics,dtype=fp8_w8a8,block_shape=[128,128].json", "candidate": {"BLOCK_SIZE_M": 16, "BLOCK_SIZE_N": 16, "BLOCK_SIZE_K": 32, "GROUP_SIZE_M": 1, "num_warps": 2, "kpack": 1, "matrix_instr_nonkdim": 16}}
+{"ts": "2026-03-10T13:06:34.837000", "event": "correctness_done", "label": "baseline 1/3600", "ok": false, "seconds": 3.6316}
+{"ts": "2026-03-10T13:06:34.837102", "event": "candidate_rejected", "label": "baseline 1/3600", "reason": "correctness_failed"}
+{"ts": "2026-03-10T13:06:34.837128", "event": "baseline_complete", "label": "baseline 1/3600", "survivors_so_far": 0, "candidate_results_so_far": 0}
+{"ts": "2026-03-10T13:06:34.837173", "event": "candidate_start", "label": "baseline 2/3600", "filename": "N=1024,K=2816,device_name=AMD_Radeon_Graphics,dtype=fp8_w8a8,block_shape=[128,128].json", "candidate": {"BLOCK_SIZE_M": 16, "BLOCK_SIZE_N": 16, "BLOCK_SIZE_K": 32, "GROUP_SIZE_M": 1, "num_warps": 2, "kpack": 1, "matrix_instr_nonkdim": 32}}
+{"ts": "2026-03-10T13:06:38.540261", "event": "correctness_done", "label": "baseline 2/3600", "ok": false, "seconds": 3.703}
+{"ts": "2026-03-10T13:06:38.540368", "event": "candidate_rejected", "label": "baseline 2/3600", "reason": "correctness_failed"}
+{"ts": "2026-03-10T13:06:38.540395", "event": "baseline_complete", "label": "baseline 2/3600", "survivors_so_far": 0, "candidate_results_so_far": 0}
+{"ts": "2026-03-10T13:06:38.540440", "event": "candidate_start", "label": "baseline 3/3600", "filename": "N=1024,K=2816,device_name=AMD_Radeon_Graphics,dtype=fp8_w8a8,block_shape=[128,128].json", "candidate": {"BLOCK_SIZE_M": 16, "BLOCK_SIZE_N": 16, "BLOCK_SIZE_K": 32, "GROUP_SIZE_M": 1, "num_warps": 2, "kpack": 2, "matrix_instr_nonkdim": 16}}
+{"ts": "2026-03-10T13:06:42.210974", "event": "correctness_done", "label": "baseline 3/3600", "ok": false, "seconds": 3.6705}
+{"ts": "2026-03-10T13:06:42.211069", "event": "candidate_rejected", "label": "baseline 3/3600", "reason": "correctness_failed"}
+{"ts": "2026-03-10T13:06:42.211094", "event": "baseline_complete", "label": "baseline 3/3600", "survivors_so_far": 0, "candidate_results_so_far": 0}
+{"ts": "2026-03-10T13:06:42.211136", "event": "candidate_start", "label": "baseline 4/3600", "filename": "N=1024,K=2816,device_name=AMD_Radeon_Graphics,dtype=fp8_w8a8,block_shape=[128,128].json", "candidate": {"BLOCK_SIZE_M": 16, "BLOCK_SIZE_N": 16, "BLOCK_SIZE_K": 32, "GROUP_SIZE_M": 1, "num_warps": 2, "kpack": 2, "matrix_instr_nonkdim": 32}}
+{"ts": "2026-03-10T13:06:46.037500", "event": "correctness_done", "label": "baseline 4/3600", "ok": false, "seconds": 3.8263}
+{"ts": "2026-03-10T13:06:46.037606", "event": "candidate_rejected", "label": "baseline 4/3600", "reason": "correctness_failed"}
+{"ts": "2026-03-10T13:06:46.037635", "event": "baseline_complete", "label": "baseline 4/3600", "survivors_so_far": 0, "candidate_results_so_far": 0}
+{"ts": "2026-03-10T13:06:46.037683", "event": "candidate_start", "label": "baseline 5/3600", "filename": "N=1024,K=2816,device_name=AMD_Radeon_Graphics,dtype=fp8_w8a8,block_shape=[128,128].json", "candidate": {"BLOCK_SIZE_M": 16, "BLOCK_SIZE_N": 16, "BLOCK_SIZE_K": 32, "GROUP_SIZE_M": 1, "num_warps": 4, "kpack": 1, "matrix_instr_nonkdim": 16}}
+{"ts": "2026-03-10T13:06:49.755169", "event": "correctness_done", "label": "baseline 5/3600", "ok": false, "seconds": 3.7174}
+{"ts": "2026-03-10T13:06:49.755275", "event": "candidate_rejected", "label": "baseline 5/3600", "reason": "correctness_failed"}
+{"ts": "2026-03-10T13:06:49.755299", "event": "baseline_complete", "label": "baseline 5/3600", "survivors_so_far": 0, "candidate_results_so_far": 0}
+{"ts": "2026-03-10T13:06:49.755340", "event": "candidate_start", "label": "baseline 6/3600", "filename": "N=1024,K=2816,device_name=AMD_Radeon_Graphics,dtype=fp8_w8a8,block_shape=[128,128].json", "candidate": {"BLOCK_SIZE_M": 16, "BLOCK_SIZE_N": 16, "BLOCK_SIZE_K": 32, "GROUP_SIZE_M": 1, "num_warps": 4, "kpack": 1, "matrix_instr_nonkdim": 32}}
+{"ts": "2026-03-10T13:06:53.500979", "event": "correctness_done", "label": "baseline 6/3600", "ok": false, "seconds": 3.7456}
+{"ts": "2026-03-10T13:06:53.501094", "event": "candidate_rejected", "label": "baseline 6/3600", "reason": "correctness_failed"}
+{"ts": "2026-03-10T13:06:53.501120", "event": "baseline_complete", "label": "baseline 6/3600", "survivors_so_far": 0, "candidate_results_so_far": 0}
+{"ts": "2026-03-10T13:06:53.501160", "event": "candidate_start", "label": "baseline 7/3600", "filename": "N=1024,K=2816,device_name=AMD_Radeon_Graphics,dtype=fp8_w8a8,block_shape=[128,128].json", "candidate": {"BLOCK_SIZE_M": 16, "BLOCK_SIZE_N": 16, "BLOCK_SIZE_K": 32, "GROUP_SIZE_M": 1, "num_warps": 4, "kpack": 2, "matrix_instr_nonkdim": 16}}
+{"ts": "2026-03-10T13:06:57.103333", "event": "correctness_done", "label": "baseline 7/3600", "ok": false, "seconds": 3.6021}
+{"ts": "2026-03-10T13:06:57.103434", "event": "candidate_rejected", "label": "baseline 7/3600", "reason": "correctness_failed"}
+{"ts": "2026-03-10T13:06:57.103459", "event": "baseline_complete", "label": "baseline 7/3600", "survivors_so_far": 0, "candidate_results_so_far": 0}
+{"ts": "2026-03-10T13:06:57.103501", "event": "candidate_start", "label": "baseline 8/3600", "filename": "N=1024,K=2816,device_name=AMD_Radeon_Graphics,dtype=fp8_w8a8,block_shape=[128,128].json", "candidate": {"BLOCK_SIZE_M": 16, "BLOCK_SIZE_N": 16, "BLOCK_SIZE_K": 32, "GROUP_SIZE_M": 1, "num_warps": 4, "kpack": 2, "matrix_instr_nonkdim": 32}}
+{"ts": "2026-03-10T13:07:00.778457", "event": "correctness_done", "label": "baseline 8/3600", "ok": false, "seconds": 3.6749}
+{"ts": "2026-03-10T13:07:00.778564", "event": "candidate_rejected", "label": "baseline 8/3600", "reason": "correctness_failed"}
+{"ts": "2026-03-10T13:07:00.778590", "event": "baseline_complete", "label": "baseline 8/3600", "survivors_so_far": 0, "candidate_results_so_far": 0}
+{"ts": "2026-03-10T13:07:00.778630", "event": "candidate_start", "label": "baseline 9/3600", "filename": "N=1024,K=2816,device_name=AMD_Radeon_Graphics,dtype=fp8_w8a8,block_shape=[128,128].json", "candidate": {"BLOCK_SIZE_M": 16, "BLOCK_SIZE_N": 16, "BLOCK_SIZE_K": 32, "GROUP_SIZE_M": 8, "num_warps": 2, "kpack": 1, "matrix_instr_nonkdim": 16}}
+{"ts": "2026-03-10T13:07:04.392455", "event": "correctness_done", "label": "baseline 9/3600", "ok": false, "seconds": 3.6138}
+{"ts": "2026-03-10T13:07:04.392557", "event": "candidate_rejected", "label": "baseline 9/3600", "reason": "correctness_failed"}
+{"ts": "2026-03-10T13:07:04.392583", "event": "baseline_complete", "label": "baseline 9/3600", "survivors_so_far": 0, "candidate_results_so_far": 0}
+{"ts": "2026-03-10T13:07:04.392626", "event": "candidate_start", "label": "baseline 10/3600", "filename": "N=1024,K=2816,device_name=AMD_Radeon_Graphics,dtype=fp8_w8a8,block_shape=[128,128].json", "candidate": {"BLOCK_SIZE_M": 16, "BLOCK_SIZE_N": 16, "BLOCK_SIZE_K": 32, "GROUP_SIZE_M": 8, "num_warps": 2, "kpack": 1, "matrix_instr_nonkdim": 32}}
+{"ts": "2026-03-10T13:07:26.429788", "event": "candidate_start", "label": "baseline 1/3600", "filename": "N=1024,K=2816,device_name=AMD_Radeon_Graphics,dtype=fp8_w8a8,block_shape=[128,128].json", "candidate": {"BLOCK_SIZE_M": 16, "BLOCK_SIZE_N": 16, "BLOCK_SIZE_K": 32, "GROUP_SIZE_M": 1, "num_warps": 2, "kpack": 1, "matrix_instr_nonkdim": 16}}
+{"ts": "2026-03-10T13:07:29.977474", "event": "correctness_done", "label": "baseline 1/3600", "ok": true, "seconds": 3.5476}
+{"ts": "2026-03-10T13:07:55.056280", "event": "profiles_done", "label": "baseline 1/3600", "seconds": 25.0787, "profile_keys": [1, 16, 64, 256]}
+{"ts": "2026-03-10T13:07:55.056412", "event": "candidate_success", "label": "baseline 1/3600", "total_seconds": 28.6266}
+{"ts": "2026-03-10T13:07:55.056880", "event": "mutations_generated", "label": "baseline 1/3600", "count": 6}
+{"ts": "2026-03-10T13:07:55.056931", "event": "candidate_start", "label": "baseline 1/3600 -> mut 1/6", "filename": "N=1024,K=2816,device_name=AMD_Radeon_Graphics,dtype=fp8_w8a8,block_shape=[128,128].json", "candidate": {"BLOCK_SIZE_M": 16, "BLOCK_SIZE_N": 16, "BLOCK_SIZE_K": 32, "GROUP_SIZE_M": 1, "num_warps": 4, "kpack": 1, "matrix_instr_nonkdim": 16}}
+{"ts": "2026-03-10T13:07:58.639785", "event": "correctness_done", "label": "baseline 1/3600 -> mut 1/6", "ok": true, "seconds": 3.5828}

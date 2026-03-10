@@ -89,13 +89,23 @@ def main() -> None:
         # the original util didn't handle overrides properly, fallback if needed
         device_name = "Unknown_Device"
 
+    # Decide FP8 subtypes (currently implicitly generic e4m3 but architected to distinguish)
+    is_fp8 = args.dtype == "fp8"
+    fp8_subtype = "fp8_e4m3" if is_fp8 else None
+
     # Baseline Persistence Setup
-    baseline_path_file = get_baseline_file_path(args.baseline_path, device_name, gfx_version, args.backend)
+    baseline_path_file = get_baseline_file_path(args.baseline_path, device_name, gfx_version, args.backend, args.dtype, fp8_subtype)
     baseline_cache = BaselineCache(baseline_path_file)
+    if not baseline_cache.is_compatible(device_name, gfx_version, args.backend, args.dtype, fp8_subtype):
+        print("Warning: Existing baseline cache is from an incompatible version or hardware config. Resetting.")
+        baseline_cache.clear()
+        
     baseline_cache.init_metadata(
         gpu=device_name,
         gfx=gfx_version,
         backend=args.backend,
+        dtype_family=args.dtype,
+        dtype_subtype=fp8_subtype,
         block_n=args.block_n,
         block_k=args.block_k
     )
@@ -123,9 +133,9 @@ def main() -> None:
          print("\nAll required configurations exist. Exiting cleanly.")
          sys.exit(0)
          
-    # Decide FP8 subtypes (currently implicitly generic e4m3 but architected to distinguish)
-    is_fp8 = args.dtype == "fp8"
-    fp8_subtype = "fp8_e4m3" if is_fp8 else None
+    if not active_inventory:
+         print("\nAll required configurations exist. Exiting cleanly.")
+         sys.exit(0)
 
     print(f"\n--- Launching Tuning Phase ---")
     print(f" Backend Configuration:   {args.backend}")
@@ -365,7 +375,7 @@ def evaluate_candidate_with_logs(
             return None
 
         t2 = time.monotonic()
-        profiles = run_workload_profiles(candidate, item.n, item.k, item.is_moe, gpu_count, args.backend)
+        profiles = run_workload_profiles(candidate, item.n, item.k, item.is_moe, gpu_count, args.backend, args.dtype)
         t3 = time.monotonic()
 
         append_jsonl(progress_log, {
