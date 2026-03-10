@@ -9,6 +9,7 @@ def _base_prelude(backend: str, dtype_family: str, is_moe: bool) -> str:
         import time
         import importlib
         import torch
+        from tuning.aiter_fp8_adapter import make_aiter_fp8_blockscale_inputs
 
         backend = "{backend}"
         dtype_family = "{dtype_family}"
@@ -243,15 +244,10 @@ def _build_aiter_triton_harness(dtype_family: str, is_moe: bool) -> str:
             You MUST point this at a real AITER execution callable.
 
             Set environment variable:
-              MAGIC_AITER_RUNNER=package.module:function_name
+            MAGIC_AITER_RUNNER=package.module:function_name
 
             Example:
-              export MAGIC_AITER_RUNNER=myproject.aiter_runner:run_aiter_triton_kernel
-
-            The callable must accept either:
-              fn(a, b, candidate)
-            or:
-              fn(a, b, candidate, requested_backend)
+            export MAGIC_AITER_RUNNER=tuning.aiter_runner:run_aiter_triton_kernel
             '''
             spec = os.environ.get("MAGIC_AITER_RUNNER", "").strip()
             if not spec:
@@ -259,7 +255,29 @@ def _build_aiter_triton_harness(dtype_family: str, is_moe: bool) -> str:
                     "aiter_triton requested, but no real AITER callable is configured. "
                     "Set MAGIC_AITER_RUNNER=package.module:function_name"
                 )
-            return _import_callable(spec), spec
+
+            if ":" not in spec:
+                raise RuntimeError(
+                    f"Invalid MAGIC_AITER_RUNNER '{spec}'. "
+                    "Expected format: package.module:function_name"
+                )
+
+            module_name, func_name = spec.split(":", 1)
+            mod = importlib.import_module(module_name)
+
+            if not hasattr(mod, func_name):
+                raise RuntimeError(
+                    f"Runner function '{func_name}' not found in module '{module_name}'"
+                )
+
+            runner = getattr(mod, func_name)
+            if not callable(runner):
+                raise RuntimeError(
+                    f"Runner '{func_name}' in module '{module_name}' exists but is not callable"
+                )
+
+            proof_fn = getattr(mod, "get_aiter_callable_proof", None)
+            return runner, proof_fn, spec
 
         def run_backend_kernel(a, b, candidate, requested_backend):
             global ACTUAL_BACKEND, BACKEND_PROOF
@@ -269,15 +287,23 @@ def _build_aiter_triton_harness(dtype_family: str, is_moe: bool) -> str:
                     f"AITER-Triton harness received wrong requested backend: {requested_backend}"
                 )
 
-            runner, proof = _resolve_aiter_runner()
+            runner, proof_fn, runner_spec = _resolve_aiter_runner()
 
             try:
-                out = runner(a, b, candidate)
-            except TypeError:
                 out = runner(a, b, candidate, requested_backend)
+            except TypeError:
+                out = runner(a, b, candidate)
 
             ACTUAL_BACKEND = "aiter_triton"
-            BACKEND_PROOF = f"external_aiter_runner:{proof}"
+
+            if callable(proof_fn):
+                try:
+                    BACKEND_PROOF = proof_fn()
+                except Exception:
+                    BACKEND_PROOF = f"external_aiter_runner:{runner_spec}"
+            else:
+                BACKEND_PROOF = f"external_aiter_runner:{runner_spec}"
+
             return out
     """)
 

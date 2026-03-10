@@ -149,11 +149,14 @@ def main() -> None:
     for i, item in enumerate(active_inventory, start=1):
         print(f"\n[{i}/{len(active_inventory)}] Tuning -> {item.filename}")
         
-        # Phase B/C - Generate & Prune
         if item.is_moe:
-            builder = MoECandidateBuilder()
+            builder = MoECandidateBuilder(backend=args.backend)
         else:
-            builder = DenseCandidateBuilder(is_amd=is_amd, is_fp8=is_fp8)
+            builder = DenseCandidateBuilder(
+                is_amd=is_amd,
+                is_fp8=is_fp8,
+                backend=args.backend
+            )
             
         candidates = builder.build()
         print(f"  Generated {len(candidates)} pruned baseline candidates.")
@@ -214,7 +217,7 @@ def main() -> None:
                 survivors += 1
 
                 # Mutation exploration only after a valid baseline
-                mutations = mutate_candidate(candidate, item.is_moe)
+                mutations = mutate_candidate(candidate, item.is_moe, args.backend)
                 append_jsonl(progress_log, {
                     "event": "mutations_generated",
                     "label": base_label,

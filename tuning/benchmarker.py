@@ -16,12 +16,19 @@ def run_isolated_benchmark_on_gpu(candidate: Dict[str, Any], m: int, n: int, k: 
         try:
             device = "cuda" if torch.cuda.is_available() else "cpu"
 
-            if "{dtype_family}" == "fp8":
+            if "{backend}" == "aiter_triton" and "{dtype_family}" == "fp8":
+                # Keep float16 masters; AITER adapter quantizes internally.
+                a = torch.randn(({m}, {k}), device=device, dtype=torch.float16)
+                b = torch.randn(({k}, {n}), device=device, dtype=torch.float16)
+
+            elif "{dtype_family}" == "fp8":
                 a = torch.randn(({m}, {k}), device=device, dtype=torch.float16).to(torch.float8_e4m3fn)
                 b = torch.randn(({k}, {n}), device=device, dtype=torch.float16).to(torch.float8_e4m3fn)
+
             elif "{dtype_family}" == "int8":
                 a = torch.randint(-128, 127, ({m}, {k}), device=device, dtype=torch.int8)
                 b = torch.randint(-128, 127, ({k}, {n}), device=device, dtype=torch.int8)
+
             else:
                 a = torch.randn(({m}, {k}), device=device, dtype=torch.float16)
                 b = torch.randn(({k}, {n}), device=device, dtype=torch.float16)
@@ -88,17 +95,17 @@ def run_isolated_benchmark_on_gpu(candidate: Dict[str, Any], m: int, n: int, k: 
             # Select correct AITER GEMM callable based on dtype
             if is_moe:
                 dtype_map = {
-                    "fp8": "moe_gemm_a8w8_blockscale",
-                    "int8": "moe_gemm_a8w8",
-                    "fp4": "moe_gemm_a8w4",
-                    "int4": "moe_gemm_a4w4",
+                    "fp8": "aiter.ops.triton.moe.moe_op_gemm_a8w8_blockscale:moe_gemm_a8w8_blockscale",
+                    "int8": "aiter.ops.triton.moe.moe_op_gemm_a8w8:moe_gemm_a8w8",
+                    "fp4": "aiter.ops.triton.moe.moe_op_gemm_a8w4:moe_gemm_a8w4",
+                    "int4": "aiter.ops.triton.moe.moe_op_gemm_a4w4:moe_gemm_a4w4",
                 }
             else:
                 dtype_map = {
-                    "fp8": "gemm_a8w8_blockscale",
-                    "int8": "gemm_a8w8",
-                    "fp4": "gemm_afp4wfp4",
-                    "int4": "gemm_a8wfp4",
+                    "fp8": "aiter.ops.triton.gemm.basic.gemm_a8w8_blockscale:gemm_a8w8_blockscale",
+                    "int8": "aiter.ops.triton.gemm.basic.gemm_a8w8:gemm_a8w8",
+                    "fp4": "aiter.ops.triton.gemm.basic.gemm_afp4wfp4:gemm_afp4wfp4",
+                    "int4": "aiter.ops.triton.gemm.basic.gemm_a8wfp4:gemm_a8wfp4",
                 }
 
             callable_name = dtype_map.get(dtype_family)

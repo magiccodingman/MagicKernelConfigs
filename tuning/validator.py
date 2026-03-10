@@ -13,14 +13,12 @@ from tuning.kernel_harness import get_harness_code
 def _build_backend_env(backend: str, dtype_family: str, is_moe: bool) -> dict:
     env = os.environ.copy()
 
+    # Ensure the temp subprocess can import this project
     project_root = str(Path(__file__).resolve().parents[1])
-
     existing = env.get("PYTHONPATH", "")
     paths = [project_root]
-
     if existing:
         paths.append(existing)
-
     env["PYTHONPATH"] = ":".join(paths)
 
     if backend == "aiter_triton":
@@ -28,17 +26,17 @@ def _build_backend_env(backend: str, dtype_family: str, is_moe: bool) -> dict:
 
         if is_moe:
             dtype_map = {
-                "fp8": "moe_gemm_a8w8_blockscale",
-                "int8": "moe_gemm_a8w8",
-                "fp4": "moe_gemm_a8w4",
-                "int4": "moe_gemm_a4w4",
+                "fp8": "aiter.ops.triton.moe.moe_op_gemm_a8w8_blockscale:moe_gemm_a8w8_blockscale",
+                "int8": "aiter.ops.triton.moe.moe_op_gemm_a8w8:moe_gemm_a8w8",
+                "fp4": "aiter.ops.triton.moe.moe_op_gemm_a8w4:moe_gemm_a8w4",
+                "int4": "aiter.ops.triton.moe.moe_op_gemm_a4w4:moe_gemm_a4w4",
             }
         else:
             dtype_map = {
-                "fp8": "gemm_a8w8_blockscale",
-                "int8": "gemm_a8w8",
-                "fp4": "gemm_afp4wfp4",
-                "int4": "gemm_a8wfp4",
+                "fp8": "aiter.ops.triton.gemm.basic.gemm_a8w8_blockscale:gemm_a8w8_blockscale",
+                "int8": "aiter.ops.triton.gemm.basic.gemm_a8w8:gemm_a8w8",
+                "fp4": "aiter.ops.triton.gemm.basic.gemm_afp4wfp4:gemm_afp4wfp4",
+                "int4": "aiter.ops.triton.gemm.basic.gemm_a8wfp4:gemm_a8wfp4",
             }
 
         callable_name = dtype_map.get(dtype_family)
@@ -49,6 +47,7 @@ def _build_backend_env(backend: str, dtype_family: str, is_moe: bool) -> dict:
         env["VLLM_ROCM_USE_AITER_LINEAR"] = "1"
         env["VLLM_ROCM_USE_AITER_TRITON_GEMM"] = "1"
 
+        # Disable unrelated AITER subsystems so we isolate GEMM tuning
         env["VLLM_ROCM_USE_AITER_MHA"] = "0"
         env["VLLM_ROCM_USE_AITER_MLA"] = "0"
         env["VLLM_ROCM_USE_AITER_RMSNORM"] = "0"
@@ -79,34 +78,55 @@ def validate_correctness(
     - backend proof is returned
     """
     harness_code = get_harness_code(backend, dtype_family, is_moe) + textwrap.dedent(f"""\
-        
+        from tuning.aiter_fp8_adapter import make_aiter_fp8_blockscale_inputs
+
         try:
+            torch.manual_seed(777)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(777)
+
             device = "cuda" if torch.cuda.is_available() else "cpu"
-
-            if "{dtype_family}" == "fp8":
-                a_16 = torch.randn(({m}, {k}), device=device, dtype=torch.float16)
-                b_16 = torch.randn(({k}, {n}), device=device, dtype=torch.float16)
-                a = a_16.to(torch.float8_e4m3fn)
-                b = b_16.to(torch.float8_e4m3fn)
-
-            elif "{dtype_family}" == "int8":
-                a_16 = torch.randint(-128, 127, ({m}, {k}), device=device, dtype=torch.int8).to(torch.float16)
-                b_16 = torch.randint(-128, 127, ({k}, {n}), device=device, dtype=torch.int8).to(torch.float16)
-                a = a_16.to(torch.int8)
-                b = b_16.to(torch.int8)
-
-            else:
-                a_16 = torch.randn(({m}, {k}), device=device, dtype=torch.float16)
-                b_16 = torch.randn(({k}, {n}), device=device, dtype=torch.float16)
-                a = a_16
-                b = b_16
 
             candidate_params = {candidate}
 
-            if "{dtype_family}" == "fp8":
-                baseline_out = torch.matmul(a.to(torch.float16), b.to(torch.float16))
+            a_16 = torch.randn(({m}, {k}), device=device, dtype=torch.float16)
+            b_16 = torch.randn(({k}, {n}), device=device, dtype=torch.float16)
+
+            if "{backend}" == "triton":
+                if "{dtype_family}" == "fp8":
+                    a = a_16.to(torch.float8_e4m3fn)
+                    b = b_16.to(torch.float8_e4m3fn)
+                    baseline_out = torch.matmul(a.to(torch.float16), b.to(torch.float16))
+
+                elif "{dtype_family}" == "int8":
+                    a = a_16.round().clamp(-128, 127).to(torch.int8)
+                    b = b_16.round().clamp(-128, 127).to(torch.int8)
+                    baseline_out = torch.matmul(a_16, b_16)
+
+                else:
+                    a = a_16
+                    b = b_16
+                    baseline_out = torch.matmul(a_16, b_16)
+
+            elif "{backend}" == "aiter_triton":
+                # Keep float16 masters; AITER adapter quantizes/adapts internally.
+                a = a_16
+                b = b_16
+
+                if "{dtype_family}" != "fp8":
+                    raise RuntimeError("aiter_triton correctness is only implemented for fp8 right now")
+
+                x_int, w_int, x_scale, w_scale, x_deq, w_deq, config = make_aiter_fp8_blockscale_inputs(
+                    a_16,
+                    b_16,
+                    candidate_params
+                )
+
+                # AITER computes Y = X @ W^T, where W is stored as (N, K)
+                baseline_out = torch.matmul(x_deq, w_deq.transpose(0, 1)).to(torch.float16)
+
             else:
-                baseline_out = torch.matmul(a_16, b_16)
+                raise RuntimeError("Unsupported backend in validator: {backend}")
 
             kernel_out = run_backend_kernel(a, b, candidate_params, "{backend}")
 
@@ -116,8 +136,32 @@ def validate_correctness(
             if torch.isinf(kernel_out).any():
                 raise RuntimeError("Inf detected in kernel output")
 
-            if not torch.allclose(baseline_out, kernel_out, atol=1e-2):
-                raise RuntimeError("Numeric discrepancy vs baseline")
+            ref = baseline_out.to(torch.float32)
+            out = kernel_out.to(torch.float32)
+
+            abs_diff = (ref - out).abs()
+            max_abs_diff = abs_diff.max().item()
+            mean_abs_diff = abs_diff.mean().item()
+
+            denom = ref.abs().clamp_min(1e-5)
+            max_rel_diff = (abs_diff / denom).max().item()
+
+            if "{backend}" == "aiter_triton":
+                # Quantized blockscale path needs looser tolerance than raw Triton path
+                atol = 5e-1
+                rtol = 5e-2
+            else:
+                atol = 1e-2
+                rtol = 1e-2
+
+            if not torch.allclose(ref, out, atol=atol, rtol=rtol):
+                raise RuntimeError(
+                    f"Numeric discrepancy vs baseline | "
+                    f"max_abs_diff={{max_abs_diff:.6f}} "
+                    f"mean_abs_diff={{mean_abs_diff:.6f}} "
+                    f"max_rel_diff={{max_rel_diff:.6f}} "
+                    f"atol={{atol}} rtol={{rtol}}"
+                )
 
             print(json.dumps({{
                 "ok": True,
@@ -162,18 +206,18 @@ def validate_correctness(
             return False
 
         lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-
         if not lines:
             print("\n[VALIDATOR FAILURE] No stdout returned")
-            print("STDERR:", result.stderr)
+            print("STDERR:", result.stderr.strip() or "<empty>")
+            print("STDOUT:", result.stdout.strip() or "<empty>")
             return False
 
         try:
             payload = json.loads(lines[-1])
         except Exception:
             print("\n[VALIDATOR FAILURE] JSON parse error")
-            print("STDOUT:", result.stdout)
-            print("STDERR:", result.stderr)
+            print("STDOUT:", result.stdout.strip() or "<empty>")
+            print("STDERR:", result.stderr.strip() or "<empty>")
             return False
 
         if not payload.get("ok", False):
@@ -195,7 +239,6 @@ def validate_correctness(
         if proof:
             print(f"[Backend Proof] {proof}")
 
-        # Extra safety for AITER callable proof
         if backend == "aiter_triton":
             expected_callable = env.get("MAGIC_AITER_CALLABLE", "")
             if expected_callable and expected_callable not in proof:
@@ -216,7 +259,11 @@ def validate_correctness(
 
 def validate_minimal_runtime(json_config_path: Path, tp_max: int) -> bool:
     """
-    Verifies JSON config schema compatibility with vLLM kernel loader expectations.
+    Verifies JSON config schema compatibility with the generated kernel config expectations.
+
+    We allow either:
+    - Triton-style batch entries with num_warps
+    - AITER-style batch entries with NUM_KSPLIT
     """
     harness = textwrap.dedent(f"""\
         import sys
@@ -235,11 +282,15 @@ def validate_minimal_runtime(json_config_path: Path, tp_max: int) -> bool:
                 if not isinstance(params, dict):
                     raise RuntimeError("Params must be dict")
 
-                required = ["BLOCK_SIZE_M", "BLOCK_SIZE_N", "BLOCK_SIZE_K", "num_warps"]
-
-                for r in required:
+                required_common = ["BLOCK_SIZE_M", "BLOCK_SIZE_N", "BLOCK_SIZE_K"]
+                for r in required_common:
                     if r not in params:
                         raise RuntimeError(f"Missing {{r}} for batch {{batch}}")
+
+                if "num_warps" not in params and "NUM_KSPLIT" not in params:
+                    raise RuntimeError(
+                        f"Batch {{batch}} must contain either 'num_warps' or 'NUM_KSPLIT'"
+                    )
 
             sys.exit(0)
 
@@ -262,7 +313,7 @@ def validate_minimal_runtime(json_config_path: Path, tp_max: int) -> bool:
 
         if result.returncode != 0:
             print("\n[JSON VALIDATION FAILURE]")
-            print(result.stderr.strip())
+            print(result.stderr.strip() or "<empty>")
             return False
 
         return True

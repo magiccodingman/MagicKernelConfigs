@@ -11,53 +11,108 @@ def probe_aiter_triton_symbols():
     gemmish = [n for n in names if "gemm" in n.lower() or "mm" in n.lower()]
     return gemmish
 
-
 def probe_aiter_triton_signatures():
-    import aiter
-    import aiter.ops.triton as ops
-
     out = {}
-    for name in sorted(dir(ops)):
-        if "gemm" not in name.lower() and "mm" not in name.lower():
-            continue
-        obj = getattr(ops, name)
-        if callable(obj):
+
+    candidates = [
+        "aiter.ops.triton.gemm.basic.gemm_a8w8_blockscale:gemm_a8w8_blockscale",
+        "aiter.ops.triton.gemm.basic.gemm_a8w8:gemm_a8w8",
+        "aiter.ops.triton.gemm.basic.gemm_afp4wfp4:gemm_afp4wfp4",
+        "aiter.ops.triton.gemm.basic.gemm_a8wfp4:gemm_a8wfp4",
+        "aiter.ops.triton.moe.moe_op_gemm_a8w8_blockscale:moe_gemm_a8w8_blockscale",
+        "aiter.ops.triton.moe.moe_op_gemm_a8w8:moe_gemm_a8w8",
+        "aiter.ops.triton.moe.moe_op_gemm_a8w4:moe_gemm_a8w4",
+        "aiter.ops.triton.moe.moe_op_gemm_a4w4:moe_gemm_a4w4",
+    ]
+
+    for spec in candidates:
+        try:
+            fn, proof = _resolve_aiter_callable(spec)
             try:
-                out[name] = str(inspect.signature(obj))
+                out[proof] = str(inspect.signature(fn))
             except Exception:
-                out[name] = "<signature unavailable>"
+                out[proof] = "<signature unavailable>"
+        except Exception as e:
+            out[spec] = f"<resolve failed: {e}>"
+
     return out
 
 
-def _resolve_aiter_callable():
-    symbol = os.environ.get("MAGIC_AITER_CALLABLE", "").strip()
-    if not symbol:
+def _resolve_aiter_callable(spec: str | None = None):
+    """
+    Resolve the real AITER callable from:
+      package.module:function_name
+
+    Example:
+      aiter.ops.triton.gemm.basic.gemm_a8w8_blockscale:gemm_a8w8_blockscale
+
+    Returns:
+      (callable_obj, "package.module:function_name")
+    """
+    if spec is None:
+        spec = os.environ.get("MAGIC_AITER_CALLABLE", "").strip()
+
+    if not spec:
         raise RuntimeError(
             "MAGIC_AITER_CALLABLE is not set. "
-            "Set it to a symbol from aiter.ops.triton, e.g. gemm_a8w8_blockscale"
+            "Expected format: package.module:function_name"
         )
 
-    import aiter
-    import aiter.ops.triton as ops
-
-    if not hasattr(ops, symbol):
-        available = [n for n in dir(ops) if "gemm" in n.lower() or "mm" in n.lower()]
+    if ":" not in spec:
         raise RuntimeError(
-            f"AITER Triton symbol '{symbol}' not found. Available candidates: {available}"
+            f"Invalid MAGIC_AITER_CALLABLE '{spec}'. "
+            "Expected format: package.module:function_name"
         )
 
-    fn = getattr(ops, symbol)
-    if not callable(fn):
-        raise RuntimeError(f"AITER Triton symbol '{symbol}' exists but is not callable")
+    module_name, func_name = spec.split(":", 1)
+    module_name = module_name.strip()
+    func_name = func_name.strip()
 
-    return fn, f"aiter.ops.triton.{symbol}"
+    if not module_name or not func_name:
+        raise RuntimeError(
+            f"Invalid MAGIC_AITER_CALLABLE '{spec}'. "
+            "Expected non-empty module and function names."
+        )
+
+    try:
+        mod = importlib.import_module(module_name)
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to import module '{module_name}' from MAGIC_AITER_CALLABLE '{spec}': {e}"
+        ) from e
+
+    if not hasattr(mod, func_name):
+        available = [n for n in dir(mod) if not n.startswith("_")]
+        raise RuntimeError(
+            f"Callable '{func_name}' not found in module '{module_name}'. "
+            f"Available exports: {available}"
+        )
+
+    fn = getattr(mod, func_name)
+
+    if not callable(fn):
+        raise RuntimeError(
+            f"Resolved object '{func_name}' in '{module_name}' exists but is not callable "
+            f"(type={type(fn)})."
+        )
+
+    proof = f"{module_name}:{func_name}"
+    return fn, proof
+
+
+def get_aiter_callable_proof() -> str:
+    """
+    Return the exact resolved AITER callable path for backend proof validation.
+    """
+    _, proof = _resolve_aiter_callable()
+    return proof
 
 
 def run_aiter_triton_kernel(a, b, candidate, requested_backend=None):
-    """
-    Real AITER Triton entrypoint wrapper.
-    """
-    # Accept None for safety, but if provided it must be correct
+    import os
+    import torch
+    from tuning.aiter_fp8_adapter import make_aiter_fp8_blockscale_inputs
+
     if requested_backend is not None and requested_backend != "aiter_triton":
         raise RuntimeError(f"Invalid backend request: {requested_backend}")
 
@@ -75,36 +130,35 @@ def run_aiter_triton_kernel(a, b, candidate, requested_backend=None):
 
     fn, proof = _resolve_aiter_callable()
 
-    M, K = a.shape
-    K2, N = b.shape
-    if K != K2:
-        raise RuntimeError(f"Shape mismatch: a.shape={a.shape}, b.shape={b.shape}")
-
-    # Candidate invocation attempts
-    last_err = None
-
-    # Most likely public style
-    try:
-        out = fn(a, b, **candidate)
-        return out
-    except Exception as e:
-        last_err = e
-
-    # Some wrappers may want explicit backend
-    try:
-        out = fn(a, b, candidate, requested_backend)
-        return out
-    except Exception as e:
-        last_err = e
-
-    # Some wrappers may accept candidate dict only
-    try:
-        out = fn(a, b, candidate)
-        return out
-    except Exception as e:
-        last_err = e
-
-    raise RuntimeError(
-        f"Resolved real AITER Triton callable ({proof}) but failed to invoke it. "
-        f"Last error: {last_err}"
+    # Dense FP8 blockscale path
+    x_int, w_int, x_scale, w_scale, _x_deq, _w_deq, config = make_aiter_fp8_blockscale_inputs(
+        a.to(torch.float16),
+        b.to(torch.float16),
+        candidate,
     )
+
+    M, K = x_int.shape
+    N, K2 = w_int.shape
+    if K != K2:
+        raise RuntimeError(f"AITER adapted shape mismatch: x={tuple(x_int.shape)} w={tuple(w_int.shape)}")
+
+    out = torch.empty((M, N), device=x_int.device, dtype=torch.float16)
+
+    try:
+        y = fn(
+            x_int,
+            w_int,
+            x_scale,
+            w_scale,
+            dtype=torch.float16,
+            y=out,
+            config=config,
+        )
+        return y
+    except Exception as e:
+        raise RuntimeError(
+            f"Resolved real AITER Triton callable ({proof}) but failed to invoke it. "
+            f"x={tuple(x_int.shape)} w={tuple(w_int.shape)} "
+            f"x_scale={tuple(x_scale.shape)} w_scale={tuple(w_scale.shape)} "
+            f"config={config}. Last error: {e}"
+        )
