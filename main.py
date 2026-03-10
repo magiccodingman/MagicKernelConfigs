@@ -82,7 +82,8 @@ def main() -> None:
         print(f"\n⚠️ {warn_msg}")
         warnings_log.append(warn_msg)
 
-    # Note try_get_device_name is returning the exact device name now without underscoring
+    # try_get_device_name currently returns the vLLM-style runtime device identifier,
+    # which may already be normalized with underscores.
     try:
         device_name = try_get_device_name(vllm_base, dt_cfg["utils_file"])
     except TypeError:
@@ -96,7 +97,10 @@ def main() -> None:
     # Baseline Persistence Setup
     baseline_path_file = get_baseline_file_path(args.baseline_path, device_name, gfx_version, args.backend, args.dtype, fp8_subtype)
     baseline_cache = BaselineCache(baseline_path_file)
-    if not baseline_cache.is_compatible(device_name, gfx_version, args.backend, args.dtype, fp8_subtype):
+    if not baseline_cache.is_compatible(
+        device_name, gfx_version, args.backend, args.dtype, fp8_subtype,
+        args.block_n, args.block_k
+    ):
         print("Warning: Existing baseline cache is from an incompatible version or hardware config. Resetting.")
         baseline_cache.clear()
         
@@ -131,11 +135,7 @@ def main() -> None:
     
     if not active_inventory:
          print("\nAll required configurations exist. Exiting cleanly.")
-         sys.exit(0)
-         
-    if not active_inventory:
-         print("\nAll required configurations exist. Exiting cleanly.")
-         sys.exit(0)
+         sys.exit(0)         
 
     print(f"\n--- Launching Tuning Phase ---")
     print(f" Backend Configuration:   {args.backend}")
@@ -157,7 +157,8 @@ def main() -> None:
             
         candidates = builder.build()
         print(f"  Generated {len(candidates)} pruned baseline candidates.")
-        
+        baseline_cache.setup_shape(item.n, item.k, item.is_moe, len(candidates))
+
         # Phase D/E - Orchestrate execution across GPU workloads
                 # Phase D/E - Orchestrate execution across GPU workloads
         candidate_results = []

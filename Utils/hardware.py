@@ -95,30 +95,32 @@ def get_amd_gfx_version(gfx_arg: str) -> str:
 def validate_backend(backend: str, is_amd: bool):
     if backend == "aiter":
         print("\n⚠️ Warning: Pure AITER tuning is requested.")
-        print("Pure AITER tuning is currently assumed/unvalidated by the developer.")
-        print("It is not implemented in this phase because it cannot currently be validated.")
+        print("Pure AITER tuning is currently not allowed in this phase.")
+        print("Only explicit Triton or explicit AITER-with-Triton-fallback paths are allowed.")
         print("Exiting cleanly.")
         sys.exit(0)
-        
+
+    if backend == "aiter_triton" and not is_amd:
+        print("\n❌ Error: 'aiter_triton' is AMD-only.")
+        sys.exit(1)
+
     if backend == "aiter_triton":
         try:
             import aiter
             import aiter.ops.triton
-            print(f"[Backend Verified] AITER runtime (Triton fallback) loaded: {aiter.ops.triton.__file__}")
+            print(f"[Backend Preflight] AITER package loadable: {aiter.__file__}")
+            print(f"[Backend Preflight] AITER Triton module loadable: {aiter.ops.triton.__file__}")
         except Exception as e:
-            print(f"\\n❌ Error: AITER runtime (Triton fallback) failed to load. Reason: {e}")
-            print("The 'aiter_triton' backend requires the AITER package compiled with Triton fallback modules to be installed.")
+            print(f"\n❌ Error: AITER Triton preflight failed. Reason: {e}")
             sys.exit(1)
-            
-    # Strict Backend Guarantee
-    print(f"\\n=== Enforcing Strict Backend Runtime: {backend} ===")
-    
-    # 1. Triton must be loadable
+
     try:
         import triton
-        assert hasattr(triton, "jit"), "Triton module missing 'jit' attribute"
-        print(f"[Backend Verified] Triton runtime loaded: {triton.__file__}")
+        assert hasattr(triton, "jit"), "Triton missing jit"
+        print(f"[Backend Preflight] Triton loadable: {triton.__file__}")
     except Exception as e:
-        print(f"\n❌ Error: Triton runtime failed to load. Reason: {e}")
-        print("Tuning requires real Triton execution to prevent simulated fallback. Aborting.")
+        print(f"\n❌ Error: Triton preflight failed. Reason: {e}")
         sys.exit(1)
+
+    print(f"\n=== Requested Backend: {backend} ===")
+    print("Runtime backend proof will be enforced inside each isolated subprocess.")

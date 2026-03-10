@@ -25,7 +25,8 @@ def get_baseline_file_path(baseline_path_arg: str, gpu_name: str, gfx_version: s
     if gfx_version:
         path = path / gfx_version
         
-    path = path / backend / dtype_family / dtype_subtype / "baseline.json"
+    subtype = dtype_subtype or "generic"
+    path = path / backend / dtype_family / subtype / "baseline.json"
     return path
 
 class BaselineCache:
@@ -65,7 +66,9 @@ class BaselineCache:
         self.data["block_k"] = block_k
         self._save()
         
-    def is_compatible(self, gpu: str, gfx: str, backend: str, dtype_family: str, dtype_subtype: str) -> bool:
+    def is_compatible(self, gpu: str, gfx: str, backend: str,
+                  dtype_family: str, dtype_subtype: str,
+                  block_n: int, block_k: int) -> bool:
         if self.data["candidate_builder_version"] != 1: return False
         if self.data["kernel_harness_version"] != 1: return False
         if self.data["schema_version"] != 1: return False
@@ -74,6 +77,8 @@ class BaselineCache:
         if self.data.get("backend") and self.data["backend"] != backend: return False
         if self.data.get("dtype_family") and self.data["dtype_family"] != dtype_family: return False
         if self.data.get("dtype_subtype") and self.data["dtype_subtype"] != dtype_subtype: return False
+        if self.data.get("block_n") and self.data["block_n"] != block_n: return False
+        if self.data.get("block_k") and self.data["block_k"] != block_k: return False
         return True
         
     def clear(self):

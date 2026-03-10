@@ -5,19 +5,17 @@ import textwrap
 from pathlib import Path
 from typing import Dict, Any
 import os
+import json
 
 from tuning.kernel_harness import get_harness_code
 
-def run_isolated_benchmark_on_gpu(candidate: Dict[str, Any], m: int, n: int, k: int, gpu_id: str, backend: str, dtype_family: str, is_moe: bool) -> float:
-    """
-    Spawns a process to benchmark the kernel on a specific GPU using real triton execution.
-    Returns the execution time in milliseconds.
-    """
+def run_isolated_benchmark_on_gpu(candidate: Dict[str, Any], m: int, n: int, k: int,
+                                  gpu_id: str, backend: str, dtype_family: str, is_moe: bool) -> float:
     harness_code = get_harness_code(backend, dtype_family, is_moe) + textwrap.dedent(f"""\
         
         try:
             device = "cuda" if torch.cuda.is_available() else "cpu"
-            
+
             if "{dtype_family}" == "fp8":
                 a = torch.randn(({m}, {k}), device=device, dtype=torch.float16).to(torch.float8_e4m3fn)
                 b = torch.randn(({k}, {n}), device=device, dtype=torch.float16).to(torch.float8_e4m3fn)
@@ -27,53 +25,136 @@ def run_isolated_benchmark_on_gpu(candidate: Dict[str, Any], m: int, n: int, k: 
             else:
                 a = torch.randn(({m}, {k}), device=device, dtype=torch.float16)
                 b = torch.randn(({k}, {n}), device=device, dtype=torch.float16)
-            
+
             candidate_params = {candidate}
-            
-            # Real Triton/AITER invocation: warmup
+
             for _ in range(3):
                 run_backend_kernel(a, b, candidate_params, "{backend}")
-            torch.cuda.synchronize()
-            
-            # Timing
+            if device != "cpu":
+                torch.cuda.synchronize()
+
             start = time.perf_counter()
             iters = 10
             for _ in range(iters):
                 run_backend_kernel(a, b, candidate_params, "{backend}")
-            torch.cuda.synchronize()
+            if device != "cpu":
+                torch.cuda.synchronize()
             end = time.perf_counter()
-            
+
             avg_ms = ((end - start) / iters) * 1000.0
-            print(f"{{avg_ms:.5f}}")
+            print(json.dumps({{
+                "avg_ms": avg_ms,
+                "actual_backend": ACTUAL_BACKEND,
+                "backend_proof": BACKEND_PROOF,
+                "requested_backend": "{backend}"
+            }}))
             sys.exit(0)
-            
+
         except Exception as e:
-            print(f"-1.0 -> {{e}}", file=sys.stderr)
+            print(json.dumps({{
+                "avg_ms": None,
+                "actual_backend": "error",
+                "backend_proof": str(e),
+                "requested_backend": "{backend}"
+            }}), file=sys.stderr)
             sys.exit(1)
     """)
-    
+
     with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
         f.write(harness_code)
         temp_path = Path(f.name)
-        
+
     try:
         env = os.environ.copy()
+
+        project_root = str(Path(__file__).resolve().parents[1])
+        existing = env.get("PYTHONPATH", "")
+
+        paths = [project_root]
+
+        if existing:
+            paths.append(existing)
+
+        env["PYTHONPATH"] = ":".join(paths)
+
         env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
         env["ROCR_VISIBLE_DEVICES"] = str(gpu_id)
+        env["HIP_VISIBLE_DEVICES"] = str(gpu_id)
+
+        if backend == "aiter_triton":
+
+            env["MAGIC_AITER_RUNNER"] = "tuning.aiter_runner:run_aiter_triton_kernel"
+
+            # Select correct AITER GEMM callable based on dtype
+            if is_moe:
+                dtype_map = {
+                    "fp8": "moe_gemm_a8w8_blockscale",
+                    "int8": "moe_gemm_a8w8",
+                    "fp4": "moe_gemm_a8w4",
+                    "int4": "moe_gemm_a4w4",
+                }
+            else:
+                dtype_map = {
+                    "fp8": "gemm_a8w8_blockscale",
+                    "int8": "gemm_a8w8",
+                    "fp4": "gemm_afp4wfp4",
+                    "int4": "gemm_a8wfp4",
+                }
+
+            callable_name = dtype_map.get(dtype_family)
+            if callable_name is None:
+                return float("inf")
+
+            env["MAGIC_AITER_CALLABLE"] = callable_name
+
+            # Enable AITER Triton GEMM
+            env["VLLM_ROCM_USE_AITER"] = "1"
+            env["VLLM_ROCM_USE_AITER_LINEAR"] = "1"
+            env["VLLM_ROCM_USE_AITER_TRITON_GEMM"] = "1"
+
+            # Disable unrelated subsystems to isolate GEMM
+            env["VLLM_ROCM_USE_AITER_MHA"] = "0"
+            env["VLLM_ROCM_USE_AITER_MLA"] = "0"
+            env["VLLM_ROCM_USE_AITER_RMSNORM"] = "0"
+            env["VLLM_ROCM_USE_AITER_PAGED_ATTN"] = "0"
+            env["VLLM_ROCM_USE_AITER_TRITON_ROPE"] = "0"
+
+            env["VLLM_ROCM_USE_AITER_MOE"] = "1" if is_moe else "0"
+
+        result = subprocess.run(
+            [sys.executable, str(temp_path)],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            env=env
+        )
+
+        if result.returncode != 0:
+            return float('inf')
+
+        lines = [x.strip() for x in result.stdout.splitlines() if x.strip()]
+        if not lines:
+            return float('inf')
+
+        payload = json.loads(lines[-1])
+
+        if payload["requested_backend"] != backend:
+            return float('inf')
+
+        if payload["actual_backend"] != backend:
+            return float('inf')
         
-        # A real benchmark wrapper would execute the specified vLLM tuning scripts here
-        result = subprocess.run([sys.executable, str(temp_path)], capture_output=True, text=True, timeout=15, env=env)
-        if result.returncode == 0:
-            try:
-                # The output is expected to be the float latency
-                lines = result.stdout.strip().split()
-                if not lines:
-                    return float('inf')
-                return float(lines[-1])
-            except ValueError:
-                return float('inf')
-        return float('inf')
-    except subprocess.TimeoutExpired:
+        if backend == "aiter_triton":
+            expected = env["MAGIC_AITER_CALLABLE"]
+            if expected not in payload["backend_proof"]:
+                return float("inf")
+
+        if payload["avg_ms"] is None:
+            return float('inf')
+
+        return float(payload["avg_ms"])
+
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, KeyError, ValueError):
         return float('inf')
     finally:
         temp_path.unlink(missing_ok=True)
