@@ -150,12 +150,20 @@ def main() -> None:
         print(f"\n[{i}/{len(active_inventory)}] Tuning -> {item.filename}")
         
         if item.is_moe:
-            builder = MoECandidateBuilder(backend=args.backend)
+            builder = MoECandidateBuilder(
+                backend=args.backend,
+                vendor=vendor,
+                target_n=item.n,
+                target_k=item.k
+            )
         else:
             builder = DenseCandidateBuilder(
                 is_amd=is_amd,
                 is_fp8=is_fp8,
-                backend=args.backend
+                backend=args.backend,
+                vendor=vendor,
+                target_n=item.n,
+                target_k=item.k
             )
             
         candidates = builder.build()
@@ -217,7 +225,14 @@ def main() -> None:
                 survivors += 1
 
                 # Mutation exploration only after a valid baseline
-                mutations = mutate_candidate(candidate, item.is_moe, args.backend)
+                mutations = mutate_candidate(
+                    candidate,
+                    item.is_moe,
+                    args.backend,
+                    vendor,
+                    item.n,
+                    item.k
+                )
                 append_jsonl(progress_log, {
                     "event": "mutations_generated",
                     "label": base_label,
