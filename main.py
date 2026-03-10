@@ -24,6 +24,10 @@ from Utils.filesystem import (
     get_base_output_dir,
     setup_output_directories
 )
+from Utils.baselines import (
+    get_baseline_file_path,
+    BaselineCache
+)
 
 # Imps from Tuning
 from tuning.inventory import generate_inventory, resolve_inventory_paths
@@ -84,6 +88,18 @@ def main() -> None:
     except TypeError:
         # the original util didn't handle overrides properly, fallback if needed
         device_name = "Unknown_Device"
+
+    # Baseline Persistence Setup
+    baseline_path_file = get_baseline_file_path(args.baseline_path, device_name, gfx_version, args.backend)
+    baseline_cache = BaselineCache(baseline_path_file)
+    baseline_cache.init_metadata(
+        gpu=device_name,
+        gfx=gfx_version,
+        backend=args.backend,
+        block_n=args.block_n,
+        block_k=args.block_k
+    )
+    print(f"\nBaseline cache location:\n{baseline_path_file}")
 
     # 2. Output directory scaffolding
     base_dir = get_base_output_dir(model_path, vendor, device_name, gfx_version, args.backend, args.dtype, args.tp_max)
@@ -166,14 +182,21 @@ def main() -> None:
                 flush=True
             )
 
-            base_result = evaluate_candidate_with_logs(
-                candidate=candidate,
-                label=base_label,
-                item=item,
-                args=args,
-                gpu_count=gpu_count,
-                progress_log=progress_log,
-            )
+            if baseline_cache.has_candidate(item.n, item.k, item.is_moe, base_key):
+                print(f"    📦 Loading {base_label} from baseline cache...", flush=True)
+                shape_key = baseline_cache.get_shape_key(item.n, item.k, item.is_moe)
+                base_result = baseline_cache.data["shapes"][shape_key]["results"][base_key]
+            else:
+                base_result = evaluate_candidate_with_logs(
+                    candidate=candidate,
+                    label=base_label,
+                    item=item,
+                    args=args,
+                    gpu_count=gpu_count,
+                    progress_log=progress_log,
+                )
+                if base_result is not None:
+                    baseline_cache.add_result(item.n, item.k, item.is_moe, base_key, base_result)
 
             if base_result is not None:
                 candidate_results.append(base_result)
@@ -203,14 +226,21 @@ def main() -> None:
 
                     seen_candidates.add(m_key)
 
-                    mut_result = evaluate_candidate_with_logs(
-                        candidate=m_cand,
-                        label=mut_label,
-                        item=item,
-                        args=args,
-                        gpu_count=gpu_count,
-                        progress_log=progress_log,
-                    )
+                    if baseline_cache.has_candidate(item.n, item.k, item.is_moe, m_key):
+                        print(f"      📦 Loading mutation ({m_idx}/{len(mutations)}) from baseline cache...", flush=True)
+                        shape_key = baseline_cache.get_shape_key(item.n, item.k, item.is_moe)
+                        mut_result = baseline_cache.data["shapes"][shape_key]["results"][m_key]
+                    else:
+                        mut_result = evaluate_candidate_with_logs(
+                            candidate=m_cand,
+                            label=mut_label,
+                            item=item,
+                            args=args,
+                            gpu_count=gpu_count,
+                            progress_log=progress_log,
+                        )
+                        if mut_result is not None:
+                            baseline_cache.add_result(item.n, item.k, item.is_moe, m_key, mut_result)
 
                     if mut_result is not None:
                         candidate_results.append(mut_result)
@@ -315,7 +345,7 @@ def evaluate_candidate_with_logs(
 
     try:
         t0 = time.monotonic()
-        ok = validate_correctness(candidate, item.n, item.k, 16, args.dtype, item.is_moe)
+        ok = validate_correctness(candidate, item.n, item.k, 16, args.dtype, item.is_moe, args.backend)
         t1 = time.monotonic()
 
         append_jsonl(progress_log, {
@@ -335,7 +365,7 @@ def evaluate_candidate_with_logs(
             return None
 
         t2 = time.monotonic()
-        profiles = run_workload_profiles(candidate, item.n, item.k, item.is_moe, gpu_count)
+        profiles = run_workload_profiles(candidate, item.n, item.k, item.is_moe, gpu_count, args.backend)
         t3 = time.monotonic()
 
         append_jsonl(progress_log, {

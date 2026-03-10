@@ -5,34 +5,29 @@ import textwrap
 from pathlib import Path
 from typing import Dict, Any
 
-def validate_correctness(candidate: Dict[str, Any], n: int, k: int, m: int, dtype_family: str, is_moe: bool) -> bool:
+from tuning.kernel_harness import TRITON_HARNESS_CODE
+
+def validate_correctness(candidate: Dict[str, Any], n: int, k: int, m: int, dtype_family: str, is_moe: bool, backend: str) -> bool:
     """
     Validates a kernel candidate by running it in an isolated subprocess.
     Ensures safe kernel execution without crashing, checks tolerance limits,
     and prevents PyTorch/Triton segfaults from taking down the tuner.
     """
-    harness_code = textwrap.dedent(f"""\
-        import sys
-        import torch
+    harness_code = TRITON_HARNESS_CODE.format(backend=backend) + textwrap.dedent(f"""\
         
         try:
             device = "cuda" if torch.cuda.is_available() else "cpu"
             
-            # Simple mock for structural validation.
-            # A completely functional tuner would import the exact vLLM kernel bound
-            # to the '{dtype_family}' namespace.
             a = torch.randn(({m}, {k}), device=device, dtype=torch.float16)
             b = torch.randn(({k}, {n}), device=device, dtype=torch.float16)
             
             candidate_params = {candidate}
-            is_moe = {is_moe}
             
             # Reference baseline
             baseline_out = torch.matmul(a, b)
             
-            # Simulated kernel output - in production, replace with: 
-            # kernel_out = run_triton_kernel(a, b, **candidate_params)
-            kernel_out = baseline_out 
+            # Real Triton/AITER invocation
+            kernel_out = run_backend_kernel(a, b, candidate_params, "{backend}")
             
             if torch.isnan(kernel_out).any() or torch.isinf(kernel_out).any():
                 print("NaN/Inf detected in output.", file=sys.stderr)

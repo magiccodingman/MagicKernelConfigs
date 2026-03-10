@@ -4,37 +4,34 @@ import tempfile
 import textwrap
 from pathlib import Path
 from typing import Dict, Any
+import os
 
-def run_isolated_benchmark_on_gpu(candidate: Dict[str, Any], m: int, n: int, k: int, gpu_id: str) -> float:
+from tuning.kernel_harness import TRITON_HARNESS_CODE
+
+def run_isolated_benchmark_on_gpu(candidate: Dict[str, Any], m: int, n: int, k: int, gpu_id: str, backend: str) -> float:
     """
-    Spawns a process to benchmark the kernel on a specific GPU.
+    Spawns a process to benchmark the kernel on a specific GPU using real triton execution.
     Returns the execution time in milliseconds.
     """
-    harness_code = textwrap.dedent(f"""\
-        import sys
-        import time
-        import torch
-        import os
-        
-        # Isolate to specific GPU
-        os.environ["CUDA_VISIBLE_DEVICES"] = "{gpu_id}"
-        os.environ["ROCR_VISIBLE_DEVICES"] = "{gpu_id}"
+    harness_code = TRITON_HARNESS_CODE.format(backend=backend) + textwrap.dedent(f"""\
         
         try:
             device = "cuda" if torch.cuda.is_available() else "cpu"
             a = torch.randn(({m}, {k}), device=device, dtype=torch.float16)
             b = torch.randn(({k}, {n}), device=device, dtype=torch.float16)
             
-            # Simulated kernel call: warmup
+            candidate_params = {candidate}
+            
+            # Real Triton/AITER invocation: warmup
             for _ in range(3):
-                torch.matmul(a, b)
+                run_backend_kernel(a, b, candidate_params, "{backend}")
             torch.cuda.synchronize()
             
-            # Simulated kernel call: timing
+            # Timing
             start = time.perf_counter()
             iters = 10
             for _ in range(iters):
-                torch.matmul(a, b)
+                run_backend_kernel(a, b, candidate_params, "{backend}")
             torch.cuda.synchronize()
             end = time.perf_counter()
             
@@ -43,7 +40,7 @@ def run_isolated_benchmark_on_gpu(candidate: Dict[str, Any], m: int, n: int, k: 
             sys.exit(0)
             
         except Exception as e:
-            print("-1.0", file=sys.stderr)
+            print(f"-1.0 -> {{e}}", file=sys.stderr)
             sys.exit(1)
     """)
     
@@ -52,8 +49,12 @@ def run_isolated_benchmark_on_gpu(candidate: Dict[str, Any], m: int, n: int, k: 
         temp_path = Path(f.name)
         
     try:
+        env = os.environ.copy()
+        env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+        env["ROCR_VISIBLE_DEVICES"] = str(gpu_id)
+        
         # A real benchmark wrapper would execute the specified vLLM tuning scripts here
-        result = subprocess.run([sys.executable, str(temp_path)], capture_output=True, text=True, timeout=15)
+        result = subprocess.run([sys.executable, str(temp_path)], capture_output=True, text=True, timeout=15, env=env)
         if result.returncode == 0:
             try:
                 # The output is expected to be the float latency
@@ -71,12 +72,12 @@ def run_isolated_benchmark_on_gpu(candidate: Dict[str, Any], m: int, n: int, k: 
 
 class BenchmarkModes:
     @staticmethod
-    def local_mode(candidate: Dict[str, Any], m: int, n: int, k: int) -> float:
+    def local_mode(candidate: Dict[str, Any], m: int, n: int, k: int, backend: str) -> float:
         """Evaluates candidate kernel in isolation on a single GPU."""
-        return run_isolated_benchmark_on_gpu(candidate, m, n, k, "0")
+        return run_isolated_benchmark_on_gpu(candidate, m, n, k, "0", backend)
 
     @staticmethod
-    def parallel_contention_mode(candidate: Dict[str, Any], m: int, n: int, k: int, gpus: int) -> float:
+    def parallel_contention_mode(candidate: Dict[str, Any], m: int, n: int, k: int, gpus: int, backend: str) -> float:
         """
         Executes candidate kernels concurrently across available GPUs.
         Simulates tensor-parallel contention.
@@ -84,7 +85,7 @@ class BenchmarkModes:
         import concurrent.futures
         
         if gpus <= 1:
-            return BenchmarkModes.local_mode(candidate, m, n, k)
+            return BenchmarkModes.local_mode(candidate, m, n, k, backend)
             
         times = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=gpus) as executor:
@@ -92,7 +93,7 @@ class BenchmarkModes:
             for i in range(gpus):
                 # We assume available GPUs are uniquely indexed starting from 0,
                 # as the orchestrator isolated the system to only identical GPUs.
-                futures.append(executor.submit(run_isolated_benchmark_on_gpu, candidate, m, n, k, str(i)))
+                futures.append(executor.submit(run_isolated_benchmark_on_gpu, candidate, m, n, k, str(i), backend))
                 
             for f in concurrent.futures.as_completed(futures):
                 times.append(f.result())
@@ -101,7 +102,7 @@ class BenchmarkModes:
         return max(times) if times else float('inf')
 
 def run_workload_profiles(candidate: Dict[str, Any], n: int, k: int, is_moe: bool, 
-                          available_gpus: int) -> Dict[int, Dict[str, float]]:
+                          available_gpus: int, backend: str) -> Dict[int, Dict[str, float]]:
     """
     Benchmarks the candidate across decode and prefill profiles (batch buckets).
     Returns a mapping of M (batch size) to latency results (both local and parallel).
@@ -113,14 +114,14 @@ def run_workload_profiles(candidate: Dict[str, Any], n: int, k: int, is_moe: boo
     results = {}
     
     for m in all_buckets:
-        local_time = BenchmarkModes.local_mode(candidate, m, n, k)
+        local_time = BenchmarkModes.local_mode(candidate, m, n, k, backend)
         
         # If the candidate crashes or performs abysmally in isolation, 
         # it will not survive parallel contention.
         if local_time == float('inf'):
             parallel_time = float('inf')
         else:
-            parallel_time = BenchmarkModes.parallel_contention_mode(candidate, m, n, k, available_gpus)
+            parallel_time = BenchmarkModes.parallel_contention_mode(candidate, m, n, k, available_gpus, backend)
             
         results[m] = {
             "local_ms": local_time,
