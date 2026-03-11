@@ -12,7 +12,6 @@ from Utils.vllm_config_utils import (
     DTYPE_CONFIGS,
     find_vllm_base_path,
     load_json,
-    normalize_text_config,
     try_get_device_name
 )
 from Utils.hardware import (
@@ -49,7 +48,7 @@ def main() -> None:
     parser.add_argument("--block-n", type=int, default=128, help="Block N size")
     parser.add_argument("--block-k", type=int, default=128, help="Block K size")
     parser.add_argument("--show-labels", action="store_true", help="Show source labels for each shape")
-    parser.add_argument("--backend", type=str, choices=["triton", "aiter", "aiter_triton"], required=True, help="Target backend")
+    parser.add_argument("--backend", type=str, choices=["triton", "aiter_triton"], required=True, help="Target backend")
     parser.add_argument("--gfx", type=str, default=None, help="gfx architecture (AMD only)")
     parser.add_argument("--baseline_path", type=str, default=None, help="path to baseline saves")
     args = parser.parse_args()
@@ -74,7 +73,6 @@ def main() -> None:
         sys.exit(1)
 
     dt_cfg = DTYPE_CONFIGS[args.dtype]
-    root_config = load_json(config_file)
     
     warnings_log = []
     if gpu_count > 0 and args.tp_max > gpu_count:
@@ -89,6 +87,8 @@ def main() -> None:
     except TypeError:
         # the original util didn't handle overrides properly, fallback if needed
         device_name = "Unknown_Device"
+
+    print(f"Device name: {device_name}")
 
     # Decide FP8 subtypes (currently implicitly generic e4m3 but architected to distinguish)
     is_fp8 = args.dtype == "fp8"
@@ -122,7 +122,7 @@ def main() -> None:
     # 3. Phase A - Target Preparation
     print(f"\n=== Generating Config Inventory for {args.dtype.upper()} ===")
     full_inventory = generate_inventory(
-        root_config=root_config, 
+        model_path=model_path, 
         tp_target=args.tp_max, 
         device_name=device_name, 
         block_n=args.block_n, 

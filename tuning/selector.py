@@ -109,7 +109,7 @@ def score_and_select_winners(candidate_results: List[Dict[str, Any]]) -> Dict[in
                 continue
                 
             local_ms = profiles[m]["local_ms"]
-            parallel_ms = profiles[m]["parallel_ms"]
+            parallel_ms = profiles[m].get("parallel_ms", float("inf"))
             
             if local_ms == float('inf') or parallel_ms == float('inf'):
                 continue
