@@ -123,7 +123,7 @@ def main() -> None:
     print(f"\n=== Generating Config Inventory for {args.dtype.upper()} ===")
     full_inventory = generate_inventory(
         model_path=model_path, 
-        tp_target=args.tp_max, 
+        tp_target=1, 
         device_name=device_name, 
         block_n=args.block_n, 
         block_k=args.block_k, 
