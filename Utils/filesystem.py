@@ -40,12 +40,26 @@ def should_write_file(filepath: Path) -> bool:
     Determines whether a file should be written based on overwrite/skip logic.
     - If file doesn't exist, return True.
     - If file exists and is 0 bytes, return True.
-    - If file exists and >0 bytes, prompt the user.
+    - If file exists but contains invalid/empty JSON, return True (allow repair to handle it).
+    - If file exists and is valid >0 bytes, prompt the user.
     """
     if not filepath.exists():
         return True
         
     if filepath.stat().st_size == 0:
+        return True
+        
+    # Check if the file is invalid JSON or empty {}
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            if not data:
+                return True # Empty map {} or []
+    except json.JSONDecodeError:
+        return True # Malformed JSON
+        
+    # Check for detached automation override
+    if os.environ.get("MAGIC_AUTO_OVERWRITE", "0") == "1":
         return True
         
     while True:

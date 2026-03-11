@@ -34,7 +34,7 @@ from tuning.inventory import generate_inventory, resolve_inventory_paths
 from tuning.candidates import DenseCandidateBuilder, MoECandidateBuilder, mutate_candidate
 from tuning.validator import validate_correctness, validate_minimal_runtime
 from tuning.benchmarker import run_workload_profiles
-from tuning.selector import score_and_select_winners
+from tuning.selector import score_and_select_winners, fallback_select_best_candidate, CalibrationSelectionError
 from serialization.writer import write_batch_keyed_json, write_manifest
 
 def main() -> None:
@@ -148,7 +148,6 @@ def main() -> None:
     
     for i, item in enumerate(active_inventory, start=1):
         print(f"\n[{i}/{len(active_inventory)}] Tuning -> {item.filename}")
-        
         if item.is_moe:
             builder = MoECandidateBuilder(
                 backend=args.backend,
@@ -170,10 +169,55 @@ def main() -> None:
         print(f"  Generated {len(candidates)} pruned baseline candidates.")
         baseline_cache.setup_shape(item.n, item.k, item.is_moe, len(candidates))
 
-        # Phase D/E - Orchestrate execution across GPU workloads
-                # Phase D/E - Orchestrate execution across GPU workloads
-        candidate_results = []
         progress_log = item.output_path.with_name(f"progress_{item.output_path.stem}.jsonl")
+        bench_dump_path = item.output_path.with_name(f"{item.output_path.stem}.bench.json")
+        
+        # Repair Detection
+        needs_repair = False
+        if not item.output_path.exists():
+            needs_repair = True
+        elif item.output_path.stat().st_size == 0:
+            needs_repair = True
+        else:
+            try:
+                with open(item.output_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    if not data:
+                        needs_repair = True
+            except json.JSONDecodeError:
+                needs_repair = True
+                
+        if needs_repair and item.output_path.exists():
+            corrupt_path = item.output_path.with_name(f"{item.output_path.name}.corrupt")
+            item.output_path.rename(corrupt_path)
+            print(f"  ⚠️ Invalid output detected. Renamed to {corrupt_path.name} to trigger repair.")
+            append_jsonl(progress_log, {"event": "repair_detected", "filename": item.output_path.name})
+        
+        if not needs_repair:
+            # We trust inventory generation, but this makes it explicitly safe
+            print(f"  ✅ Output {item.filename} looks valid. Skipping.")
+            continue
+            
+        candidate_results = []
+        is_resume = False
+        
+        # Pre-Validate Benchmark Schema & Load Cache
+        if bench_dump_path.exists():
+            try:
+                with open(bench_dump_path, 'r', encoding='utf-8') as f:
+                    bench_data = json.load(f)
+                    if isinstance(bench_data, list) and all(isinstance(x, dict) and "candidate" in x and "profiles" in x for x in bench_data):
+                        print(f"  📦 Resuming from valid benchmark data: {bench_dump_path.name}")
+                        is_resume = True
+                        for entry in bench_data:
+                            k = candidate_key(entry["candidate"])
+                            baseline_cache.add_result(item.n, item.k, item.is_moe, k, entry)
+                    else:
+                        print(f"  ⚠️ Benchmark data malformed. Ignoring {bench_dump_path.name}.")
+            except Exception as e:
+                print(f"  ⚠️ Could not read benchmark data: {e}")
+
+        # Phase D/E - Orchestrate execution across GPU workloads
         seen_candidates = set()
 
         total_baselines = len(candidates)
@@ -291,24 +335,39 @@ def main() -> None:
              
         # Phase F - Selection
         winners_by_bucket = score_and_select_winners(candidate_results)
+        if not winners_by_bucket:
+             print("  ⚠️ Standard selector yielded empty buckets. Engaging fallback_select_best_candidate()...")
+             winners_by_bucket = fallback_select_best_candidate(candidate_results)
+             
+        if not winners_by_bucket:
+             raise CalibrationSelectionError(f"Calibration for {item.filename} failed to produce any valid output buckets.")
         
         # Save raw benchmarks logs before paring down winners
         try:
-            bench_dump_path = item.output_path.with_name(f"benchmark_{item.output_path.name}")
             with open(bench_dump_path, 'w', encoding='utf-8') as f:
                 json.dump(candidate_results, f, indent=4)
-            print(f"  📝 Saved complete benchmark tracking to: {bench_dump_path.name}")
+            if is_resume:
+                print(f"  📝 Updated complete benchmark tracking to: {bench_dump_path.name}")
+            else:
+                print(f"  📝 Saved complete benchmark tracking to: {bench_dump_path.name}")
         except Exception as e:
             print(f"  ⚠️ Warning: Could not save benchmark dump: {e}")
             
         # Phase G - Persistence
-        write_batch_keyed_json(winners_by_bucket, item.output_path, item.is_moe)
+        write_batch_keyed_json(winners_by_bucket, item.output_path, item.is_moe, args.backend)
+        
+        if is_resume:
+            append_jsonl(progress_log, {
+                "event": "repair_reconstructed_from_benchmarks",
+                "winners": len(winners_by_bucket)
+            })
         
         # Enforce validation of the JSON format against exact loader rules
         if not validate_minimal_runtime(item.output_path, args.tp_max):
-             print(f"  ⚠️ Warning: Post-write validation failed for {item.filename}.")
-        else:
-             print(f"  ✅ Saved dynamically scaled configs mapping to buckets: {list(winners_by_bucket.keys())}")
+             print(f"  ❌ Fatal Error: Post-write validation failed for {item.filename}.")
+             sys.exit(1)
+             
+        print(f"  ✅ Saved dynamically scaled configs mapping to buckets: {list(winners_by_bucket.keys())}")
              
     # Write global manifest securely tracking context
     manifest_data = {

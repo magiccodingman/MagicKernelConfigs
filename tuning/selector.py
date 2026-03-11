@@ -33,6 +33,46 @@ def calculate_neighbor_penalty(candidate_profiles: Dict[int, Dict[str, float]], 
             
     return penalty
 
+class CalibrationSelectionError(Exception):
+    """Raised when kernel configuration selection yields no viable candidates."""
+    pass
+
+def fallback_select_best_candidate(candidate_results: List[Dict[str, Any]]) -> Dict[int, Dict[str, Any]]:
+    """
+    Deterministic fallback logic. 
+    Selects the absolute best candidate for *each evaluated bucket* based purely on the lowest local_ms (concurrency=1).
+    Ignores neighbor penalties and parallel metrics, guaranteeing an output for every profiled batch size.
+    """
+    if not candidate_results:
+        return {}
+        
+    eval_buckets = sorted({
+        bucket
+        for result in candidate_results
+        for bucket in result["profiles"].keys()
+    })
+    winners = {}
+    
+    for m in eval_buckets:
+        best_score = float('inf')
+        best_candidate = None
+        
+        for result in candidate_results:
+            profiles = result["profiles"]
+            if m not in profiles:
+                continue
+                
+            local_ms = profiles[m]["local_ms"]
+            
+            if local_ms < best_score:
+                best_score = local_ms
+                best_candidate = result["candidate"]
+                
+        if best_candidate is not None:
+            winners[m] = best_candidate
+            
+    return winners
+
 def score_and_select_winners(candidate_results: List[Dict[str, Any]]) -> Dict[int, Dict[str, Any]]:
     """
     Selects the winning kernel configuration for each evaluated batch bucket.
@@ -51,8 +91,12 @@ def score_and_select_winners(candidate_results: List[Dict[str, Any]]) -> Dict[in
     if not candidate_results:
         return {}
         
-    # Determine the M buckets evaluated (assuming all ran the same buckets)
-    eval_buckets = list(candidate_results[0]["profiles"].keys())
+    # Determine the M buckets evaluated accurately handling partial failures
+    eval_buckets = sorted({
+        bucket
+        for result in candidate_results
+        for bucket in result["profiles"].keys()
+    })
     winners = {}
     
     for m in eval_buckets:
