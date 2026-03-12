@@ -119,8 +119,11 @@ def main() -> None:
     base_dir = get_base_output_dir(model_path, vendor, device_name, gfx_version, args.backend, args.dtype, args.tp_max)
     dense_dir, moe_dir = setup_output_directories(base_dir)
 
+    
     # 3. Phase A - Target Preparation
     print(f"\n=== Generating Config Inventory for {args.dtype.upper()} ===")
+
+    # This is broken, I know that, I'm still working on it. the passing in 1 tp target is purposeful rn.
     full_inventory = generate_inventory(
         model_path=model_path, 
         tp_target=1, 

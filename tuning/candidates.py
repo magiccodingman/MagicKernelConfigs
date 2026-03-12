@@ -146,21 +146,34 @@ def _aiter_triton_fp8_shape_space(vendor: str, target_n: int, target_k: int) -> 
     return m_blocks, n_blocks, k_blocks, g_blocks, ksplits
 
 
+def _dense_stage_options(vendor: str) -> List[int]:
+    vendor = (vendor or "").lower()
+    if vendor == "amd":
+        return [1, 2, 3, 4]
+    if vendor == "nvidia":
+        return [2, 3, 4, 5]
+    return [1, 2, 3, 4]
+
+
 def get_base_candidates_triton_dense(vendor: str, target_n: int, target_k: int) -> List[Dict[str, Any]]:
     m_blocks, n_blocks, k_blocks, g_blocks, warps = _triton_dense_shape_space(
         vendor=vendor,
         target_n=target_n,
         target_k=target_k,
     )
+    stages = _dense_stage_options(vendor)
 
     out = []
-    for m, n, k, g, w in itertools.product(m_blocks, n_blocks, k_blocks, g_blocks, warps):
+    for m, n, k, g, w, s in itertools.product(
+        m_blocks, n_blocks, k_blocks, g_blocks, warps, stages
+    ):
         out.append({
             "BLOCK_SIZE_M": m,
             "BLOCK_SIZE_N": n,
             "BLOCK_SIZE_K": k,
             "GROUP_SIZE_M": g,
             "num_warps": w,
+            "num_stages": s,
         })
     return out
 
@@ -195,8 +208,9 @@ def filter_occupancy(
     """
     Cross-backend, cross-vendor pruning.
 
-    This is not meant to perfectly model hardware; it's meant to remove obviously
-    unproductive search points without throwing away realistic winners.
+    This is not a perfect hardware model. It is a conservative search-pruning
+    layer intended to remove obviously bad search points while preserving
+    realistic winners.
     """
     vendor = (vendor or "").lower()
     backend = (backend or "").lower()
@@ -204,58 +218,92 @@ def filter_occupancy(
     m = int(candidate["BLOCK_SIZE_M"])
     n = int(candidate["BLOCK_SIZE_N"])
     k = int(candidate["BLOCK_SIZE_K"])
-    w = int(candidate.get("num_warps", 4))
     g = int(candidate.get("GROUP_SIZE_M", 1))
+    w = int(candidate.get("num_warps", 4))
     ks = int(candidate.get("NUM_KSPLIT", 1))
+    stages = int(candidate.get("num_stages", 2))
 
     block_vol = m * n * k
+    out_tile = m * n
 
-    # Hard upper bound: absurdly large tiles
+    # ------------------------------------------------------------
+    # Hard sanity bounds
+    # ------------------------------------------------------------
+
+    # Absurdly large tiles
     if block_vol > 128 * 256 * 128:
         return False
 
-    # Tiny tiles are almost never worth it on modern GPUs for medium/large shapes
+    # Only allow reasonable tile sizes for this tuner
+    if m < 16 or m > 256:
+        return False
+    if n < 16 or n > 256:
+        return False
+    if k < 16 or k > 256:
+        return False
+
+    # GROUP_SIZE_M sanity
+    if g < 1 or g > 8:
+        return False
+
+    # ------------------------------------------------------------
+    # Shape-aware pruning
+    # ------------------------------------------------------------
+
+    # Tiny M/N tiles are generally wasteful for medium+ output sizes
     if target_n >= 512 and m < 32:
         return False
     if target_n >= 512 and n < 32:
         return False
 
-    # For very large N, 16-wide N tiles are essentially wasted exploration
+    # For large output width, tiny N blocks are rarely worthwhile
     if target_n >= 2048 and n < 64:
         return False
 
-    # For very large K, tiny K tiles become mostly overhead
+    # For large K, tiny K blocking is usually overhead-dominated
     if target_k >= 4096 and k < 64:
         return False
 
-    # group size beyond 8 is usually not worth the extra search for dense public APIs
-    if g > 8:
-        return False
-
-    # NUM_KSPLIT > 1 is only reasonable when K is big enough to justify it
+    # NUM_KSPLIT > 1 only makes sense when K is actually large enough
     if ks > 1 and target_k < 2048:
         return False
 
-    # Vendor-aware warp sanity
+    # Avoid over-splitting K on tiny tiles
+    if ks > 1 and out_tile < 2048:
+        return False
+
+    # ------------------------------------------------------------
+    # Backend-aware pruning
+    # ------------------------------------------------------------
+
     if backend == "triton":
+        # Intel tends to prefer smaller warp choices in your current search model
         if vendor == "intel" and w > 4:
             return False
 
-        # very small output tiles with huge warps are wasteful
-        if m * n < 1024 and w > 4:
+        # Huge warp counts on tiny output tiles are usually wasted
+        if out_tile < 1024 and w > 4:
             return False
 
-    # AITER public FP8 blockscale path does not use Triton-only internal knobs
-    if backend == "aiter_triton":
-        if "num_warps" in candidate:
+        # num_stages sanity for Triton search
+        if stages < 1 or stages > 5:
             return False
-        if "kpack" in candidate:
+
+    elif backend == "aiter_triton":
+        # AITER Triton dense FP8 path is primarily shaped by tile config and ksplit.
+        # Do not aggressively prune based on Triton-only scheduling assumptions here.
+        if stages < 1 or stages > 5:
             return False
-        if "matrix_instr_nonkdim" in candidate:
-            return False
+
+    else:
+        return False
+
+    # ------------------------------------------------------------
+    # MoE-specific pruning
+    # ------------------------------------------------------------
 
     if is_moe:
-        stages = int(candidate.get("num_stages", 2))
+        # Deep staging on already-large tiles is often not worth exploring
         if stages >= 4 and block_vol > 64 * 128 * 64:
             return False
 

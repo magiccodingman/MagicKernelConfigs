@@ -266,38 +266,62 @@ def validate_minimal_runtime(json_config_path: Path, tp_max: int) -> bool:
     - AITER-style batch entries with NUM_KSPLIT
     """
     harness = textwrap.dedent(f"""\
-        import sys
-        import json
+            import sys
+            import json
 
-        try:
-            with open(r'{json_config_path}', 'r', encoding='utf-8') as f:
-                data = json.load(f)
+            try:
+                with open(r'{json_config_path}', 'r', encoding='utf-8') as f:
+                    data = json.load(f)
 
-            if not isinstance(data, dict):
-                raise RuntimeError("Config root must be a dict")
+                if not isinstance(data, dict):
+                    raise RuntimeError("Config root must be a dict")
 
-            for batch_str, params in data.items():
-                batch = int(batch_str)
-
-                if not isinstance(params, dict):
-                    raise RuntimeError("Params must be dict")
+                allowed = {{
+                    "BLOCK_SIZE_M",
+                    "BLOCK_SIZE_N",
+                    "BLOCK_SIZE_K",
+                    "GROUP_SIZE_M",
+                    "num_warps",
+                    "num_stages",
+                    "kpack",
+                    "matrix_instr_nonkdim",
+                }}
 
                 required_common = ["BLOCK_SIZE_M", "BLOCK_SIZE_N", "BLOCK_SIZE_K"]
-                for r in required_common:
-                    if r not in params:
-                        raise RuntimeError(f"Missing {{r}} for batch {{batch}}")
 
-                if "num_warps" not in params and "NUM_KSPLIT" not in params:
-                    raise RuntimeError(
-                        f"Batch {{batch}} must contain either 'num_warps' or 'NUM_KSPLIT'"
-                    )
+                for batch_str, params in data.items():
+                    batch = int(batch_str)
 
-            sys.exit(0)
+                    if not isinstance(params, dict):
+                        raise RuntimeError(f"Params for batch {{batch}} must be dict")
 
-        except Exception as e:
-            print(f"Runtime JSON validation failure: {{e}}", file=sys.stderr)
-            sys.exit(1)
-    """)
+                    for r in required_common:
+                        if r not in params:
+                            raise RuntimeError(f"Missing {{r}} for batch {{batch}}")
+
+                    if "NUM_KSPLIT" in params:
+                        raise RuntimeError(
+                            f"Batch {{batch}} contains NUM_KSPLIT, which is not allowed in persisted vLLM configs"
+                        )
+
+                    if "num_warps" not in params:
+                        raise RuntimeError(f"Missing num_warps for batch {{batch}}")
+
+                    if "num_stages" not in params:
+                        raise RuntimeError(f"Missing num_stages for batch {{batch}}")
+
+                    unknown = [k for k in params.keys() if k not in allowed]
+                    if unknown:
+                        raise RuntimeError(
+                            f"Unknown keys for batch {{batch}}: {{unknown}}"
+                        )
+
+                sys.exit(0)
+
+            except Exception as e:
+                print(f"Runtime JSON validation failure: {{e}}", file=sys.stderr)
+                sys.exit(1)
+        """)
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
         f.write(harness)
