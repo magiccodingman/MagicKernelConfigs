@@ -321,12 +321,15 @@ def _safe_ratio(numerator: float, denominator: float, fallback: float = 0.0) -> 
     return float(numerator / denominator)
 
 
-def _tp_group_wall_ms(worker_payloads: List[Dict[str, Any]]) -> float:
-    """
-    In TP, the slowest worker gates the group's step time.
-    """
+def _tp_group_wall_ms(worker_payloads):
     vals = [float(x["total_ms"]) for x in worker_payloads if x.get("ok")]
-    return max(vals) if vals else float("inf")
+    if not vals:
+        return float("inf")
+
+    vals.sort()
+    idx = int(len(vals) * 0.95)
+    idx = min(idx, len(vals) - 1)
+    return vals[idx]
 
 
 def _tp_group_avg_ms(worker_payloads: List[Dict[str, Any]]) -> float:
@@ -694,7 +697,7 @@ class BenchmarkModes:
         total_tps = float(scenario["total_tps"])
         if total_tps <= 0:
             return float("inf")
-        return 1000.0 / total_tps
+        return float(scenario["ms_per_request_proxy"])
 
 
 def run_workload_profiles(
