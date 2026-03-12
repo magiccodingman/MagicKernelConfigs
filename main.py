@@ -456,7 +456,18 @@ def evaluate_candidate_with_logs(
             return None
 
         t2 = time.monotonic()
-        profiles = run_workload_profiles(candidate, item.n, item.k, item.is_moe, gpu_count, args.backend, args.dtype)
+        profiles = run_workload_profiles(
+            candidate=candidate,
+            n=item.n,
+            k=item.k,
+            is_moe=item.is_moe,
+            available_gpus=gpu_count,
+            backend=args.backend,
+            dtype_family=args.dtype,
+            tp_target=args.tp_max,
+            max_concurrency=10,
+            ops_per_request=6,
+        )
         t3 = time.monotonic()
 
         append_jsonl(progress_log, {
